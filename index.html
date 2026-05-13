@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FPS Mobile Landscape Fix</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        
+        #joystick-container {
+            position: absolute; bottom: 10%; left: 5%;
+            width: 150px; height: 150px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%; z-index: 20;
+        }
+        #joystick-handle {
+            position: absolute; top: 50px; left: 50px;
+            width: 50px; height: 50px;
+            background: #0f0;
+            border-radius: 50%; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="joystick-container"><div id="joystick-handle"></div></div>
+    
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- 1. WORLD ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        scene.add(new THREE.GridHelper(500, 100, 0x555555, 0x222222));
+        scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+        
+        // Pillars for depth perception
+        const boxGeo = new THREE.BoxGeometry(2, 10, 2);
+        for(let i=0; i<60; i++) {
+            const m = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial({color: 0x5555ff}));
+            m.position.set(Math.random()*300-150, 5, Math.random()*300-150);
+            scene.add(m);
+        }
+
+        camera.position.set(0, 2, 0);
+        camera.rotation.order = 'YXZ';
+
+        // --- 2. INPUT STATE & JOYSTICK POSITIONS ---
+        let moveX = 0, moveY = 0;
+        let lookDeltaX = 0, lookDeltaY = 0;
+        let moveTouchId = null, lookTouchId = null;
+        let lastLookX = 0, lastLookY = 0;
+
+        const handle = document.getElementById('joystick-handle');
+        const container = document.getElementById('joystick-container');
+        
+        // Variables to store joystick center
+        let centerX, centerY;
+
+        // Function to refresh joystick position on resize/rotate
+        function updateJoystickBounds() {
+            const rect = container.getBoundingClientRect();
+            centerX = rect.left + rect.width / 2;
+            centerY = rect.top + rect.height / 2;
+        }
+        updateJoystickBounds(); // Run on start
+
+        // --- 3. TOUCH LOGIC ---
+        window.addEventListener('touchstart', (e) => {
+            for (let t of e.changedTouches) {
+                // If touch is on the left half of the screen
+                if (t.pageX < window.innerWidth / 2) {
+                    moveTouchId = t.identifier;
+                } else {
+                    lookTouchId = t.identifier;
+                    lastLookX = t.pageX; lastLookY = t.pageY;
+                }
+            }
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            for (let t of e.changedTouches) {
+                if (t.identifier === moveTouchId) {
+                    const dx = t.pageX - centerX;
+                    const dy = t.pageY - centerY;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    const limit = 60; 
+
+                    const moveRatio = Math.min(dist, limit) / (dist || 1);
+                    const finalX = dx * moveRatio;
+                    const finalY = dy * moveRatio;
+                    handle.style.transform = `translate(${finalX}px, ${finalY}px)`;
+
+                    moveX = finalX / limit;
+                    moveY = finalY / limit;
+                }
+                
+                if (t.identifier === lookTouchId) {
+                    lookDeltaX = (t.pageX - lastLookX) * 0.008;
+                    lookDeltaY = (t.pageY - lastLookY) * 0.008;
+                    lastLookX = t.pageX; lastLookY = t.pageY;
+                }
+            }
+        }, { passive: false });
+
+        window.addEventListener('touchend', (e) => {
+            for (let t of e.changedTouches) {
+                if (t.identifier === moveTouchId) {
+                    moveTouchId = null; moveX = 0; moveY = 0;
+                    handle.style.transform = `translate(0, 0)`;
+                }
+                if (t.identifier === lookTouchId) {
+                    lookTouchId = null; lookDeltaX = 0; lookDeltaY = 0;
+                }
+            }
+        });
+
+        // --- 4. ENGINE ---
+        const forward = new THREE.Vector3();
+        const right = new THREE.Vector3();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Look
+            camera.rotation.y -= lookDeltaX;
+            camera.rotation.x -= lookDeltaY;
+            camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x));
+            lookDeltaX *= 0.8; lookDeltaY *= 0.8;
+
+            // Movement
+            const speed = 0.45;
+            camera.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+            right.crossVectors(forward, camera.up).normalize();
+
+            camera.position.addScaledVector(forward, -moveY * speed);
+            camera.position.addScaledVector(right, moveX * speed);
+
+            camera.position.y = 2; 
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // IMPORTANT: Fix for Landscape Rotation
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            // Re-calculate joystick center because the screen moved!
+            updateJoystickBounds();
+        });
+    </script>
+</body>
+</html>
